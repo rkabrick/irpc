@@ -1,6 +1,9 @@
-from irpc.bindingEntity import entity2Compound
-from pycparser.c_ast import Compound, ID, If, For, BinaryOp, Assignment, FuncCall, ExprList
+import sys
+sys.path.append('../')
+from irpc.bindingEntity import entity2Compound, entity2CompoundSimple, node_extract
+from pycparser.c_ast import Compound, ID, If, For, UnaryOp, BinaryOp, Assignment, FuncCall, ExprList, FuncDef, Decl, Constant, While
 
+from collections import defaultdict
 import unittest
 
 class TestBinding(unittest.TestCase):
@@ -263,8 +266,6 @@ void foo() {
         d = self.src2d(src, ['a'])
         assert (len(d['a']) == 1)
         assert (d['a'].pop().block_items[0].cond.name == 'c2')
-
-
 
 if __name__ == "__main__":
     unittest.main()

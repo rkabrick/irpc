@@ -3,13 +3,13 @@
 from pycparser.c_ast import FuncCall, For, While, FuncDef, Return, FuncDecl, ExprList, ID, Decl, TypeDecl, IdentifierType, If, BinaryOp, UnaryOp, Compound, Assignment, Constant, Switch, Case
 
 from irpc.irpctyping import *
-from irpc.bindingEntity import entity2Compound
+from irpc.bindingEntity import entity2Compound, entity2CompoundSimple, touch2entity
+from irpc.ASTfactory import ASTfactory
 
 from collections import defaultdict
-from itertools import groupby
 # Function can:
 #   - use entity
-#   - be a provider
+#    be a provider
 #
 # A provider:
 #    - provide an entity
@@ -23,68 +23,6 @@ def is_provider(funcdef: FuncDef):
 
 def provider_name(provdef: ProvDef):
     return provdef.decl.name.split('provide_').pop()
-
-class ASTfactory:
-
-    def __init__(self, entity):
-        self.entity = entity
-
-    @property
-    def memo_flag_name(self):
-        return f'{self.entity}_provided'
-
-    @property
-    def c_touch_name(self):
-        return f'touch_{self.entity}'
-
-    @property
-    def provider(self):
-        return f'provide_{self.entity}'
-
-    def gen_memo_flag_node(self,self_touch):
-        val = 'true' if self_touch else 'false'
-        type_ = TypeDecl(declname = self.memo_flag_name,
-                         quals=[], type=IdentifierType(names=['bool']))
-        return Decl(name=self.entity, quals=[],
-                    storage=[], funcspec=[],
-                    type= type_, init=ID(name=val),
-                    bitsize=None)
-
-    @property
-    def memo_flag_node_self(self):
-        return self.gen_memo_flag_node(True)
-
-    @property
-    def memo_flag_node(self):
-        return self.gen_memo_flag_node(False)
-    
-    @property
-    def touch_definition_node(self):
-        type_ = FuncDecl(args=None,
-                         type=TypeDecl(declname=self.c_touch_name,
-                                       quals=[], type=IdentifierType(names=['void'])))
-        return FuncDef(decl=Decl(name=self.c_touch_name,
-                                 quals=[], storage=[],
-                                 funcspec=[], type=type_,
-                                 init=None, bitsize=None),
-                       param_decls=None, body=Compound(block_items=[]))
-
-    @property
-    def touch_declaration_node(self):
-        return FuncDecl(args=None,
-                        type=TypeDecl(declname=self.c_touch_name,
-                                      quals=[], type=IdentifierType(names=['void'])))
-    @property
-    def cached_provider_call(self):
-        provider = self.provider
-        entity_flag = self.memo_flag_name
-        return If(cond=UnaryOp(op='!', expr=ID(name=entity_flag)),
-                  iftrue=Compound(block_items=[ FuncCall(name=ID(name=provider), args=None),
-                                                Assignment(op='=',
-                                                           lvalue=ID(name=entity_flag),
-                                                           rvalue=Constant(type='bool', value='true'))]),
-                  iffalse=None)
-
 
 def hoist_declaration(main: FuncDef,
                       provdef: ProvDef,
@@ -106,69 +44,6 @@ def hoist_declaration(main: FuncDef,
             # is_provided Boolean
             main.insert(1, astfactory.memo_flag_node)
             break
-
-def node_extract(node):
-    if isinstance(node, Compound):
-        return node.block_items
-    elif isinstance(node, If):
-        return [node.iftrue, node.iffalse]
-    elif isinstance(node, (While, For) ):
-        return [ node.cond, node.stmt ]
-    elif isinstance(node, FuncDef):
-        return [ node.body ]
-    elif isinstance(node, ( Switch, Case ) ):
-        return [node.stmts]
-    elif isinstance(node, BinaryOp):
-        return [node.left, node.right]
-    elif isinstance(node, Assignment):
-        return [node.lvalue, node.rvalue]
-    elif isinstance(node, ID):
-        return [node.name]
-    elif isinstance(node, ExprList):
-        return node.exprs
-    elif isinstance(node, FuncCall) and node.args:
-        return node.args
-    elif  isinstance(node, (Return, Decl, Constant)):
-        return []
-    elif isinstance(node, UnaryOp):
-        return [ node.expr ]
-    else:
-        return []
-
-def find_instances(astnode, l_ent, _type_, old_compound = None, idx_old_compound = 0):
-    """
-    Recursively search through AST to locate all instances of ID nodes
-
-    Args:
-        param1: Node to be analyzed (ie. FuncDef, Compound, etc)
-        param2: Placeholder for current compounds parent (None by default)
-        param3: Cached index to maintain integrity of value across recurses (Default 0: ie. No cache)
-
-    Returns:
-        Returns a dict of all Compounds containing instances of entity w/ provider
-    """
-    # d holds all compounds with appropriate index values based on entity occurences
-    d = defaultdict(list)
-    # Recurses through elements in body of head node
-
-    for i, node in enumerate(node_extract(astnode)):
-
-        if isinstance(node, Compound):
-            old_compound = node
-
-        if isinstance(astnode, Compound):
-            idx_old_compound = i
-        # Append any entries of ID node names to d so long as it is a function with a provider
-        if isinstance(node, _type_):
-            if node.name in l_ent:
-                if d[node.name] == [] or ( d[node.name][-1] != (old_compound, idx_old_compound) ):
-                    d[node.name].append( (old_compound, idx_old_compound) )
-        # If anything but instance of ID -> recurse
-        else:
-            # Recursive call followed by updating the dictionary
-            for k,v in find_instances(node, l_ent, _type_, old_compound, idx_old_compound).items():
-                d[k] += v
-    return d
 
 def add_provider_call(funcdef: FuncDef,
                       entnames: Set[Entity]):
@@ -206,21 +81,17 @@ def gen_child_adjacency_graph(l_provider, l_ent):
 
     return child_adjacency_graph
 
-def find_touches(filename):
-    l_touch = set()
-    with open(filename, 'r') as input:
-        for line in input:
-            if line.strip().startswith("touch_") and line.strip().endswith("();"):
-                l_touch.add(line.strip().split("()").pop(0))
-    return(l_touch)
+def gen_touch_declaration(entity,
+                          adjacency_graph,
+                          main: FuncDef):
 
-def hoist_touch(entity,
-                adjacency_graph,
-                main: FuncDef):
-    touch_def = ASTfactory(entity).touch_definition_node
-    touch_decl = ASTfactory(entity).touch_declaration_node
+    astfact =  ASTfactory(entity)
+    touch_def = astfact.touch_definition_node
+    touch_decl = astfact.touch_declaration_node
+    
     for ent_touched in sorted(adjacency_graph[entity]):
         touch_def.body.block_items.insert(1,ASTfactory(ent_touched).memo_flag_node)
+    
     main.insert(len(main)-1, touch_def)
     main.insert(0, touch_decl)
 
@@ -250,7 +121,7 @@ def insert_provider_call(funcdef: FuncDef,
         d_idx_entity = d[compound]
         for index in sorted(d_idx_entity, reverse=True):
             l_entity = d_idx_entity[index]
-            for entity in l_entity:
+            for entity in sorted(l_entity):
                 provider_call = ASTfactory(entity).cached_provider_call
                 compound.block_items.insert(index, provider_call)
 
@@ -261,7 +132,6 @@ if __name__ == "__main__":
 
     filename = sys.argv[1]
     headers, text = remove_headers(filename)
-    l_touch = find_touches(filename)
 
     parser = c_parser.CParser()
     ast = parser.parse(text)
@@ -275,13 +145,23 @@ if __name__ == "__main__":
 
     for f in l_func:
         l_ent_adjusted = l_ent - set([provider_name(f)] if is_provider(f) else () )
-        insert_provider_call(f, find_instances(f, l_ent_adjusted, ID))
+        insert_provider_call(f, entity2CompoundSimple(f, l_ent_adjusted, ID))
 
     for p in l_sorted_provider:
         hoist_declaration(ast.ext, p, adjacency_graph)
 
-    for t in l_touch:
-        hoist_touch(t.split("touch_").pop(), adjacency_graph, ast.ext)
+    # When touching inside a while / for statement should ensure that the entity in statement are reprovided
+    l_touch = set()
+    for p in l_func:
+        for (entity_touched, compound), l_e in touch2entity(p,l_ent).items():
+            for e in sorted(l_e):
+                provider_call = ASTfactory(e).cached_provider_call
+                compound.block_items.insert(len(compound.block_items), provider_call)
+            l_touch.add(entity_touched)
+
+    for t in sorted(l_touch):
+        gen_touch_declaration(t, adjacency_graph, ast.ext)
+
     generator = c_generator.CGenerator()
     print(headers)
     print(generator.visit(ast))

@@ -12,7 +12,7 @@ class TestFind(unittest.TestCase):
 
     def src2d(self, src, argv):
         ast = self.parser.parse(src)
-        return find_instances(ast.ext[0], set(argv), ID)
+        return find_instances(ast.ext[0], list(l_ent), ID)
 
 #  __
 # (_  o ._ _  ._  |  _
@@ -45,20 +45,99 @@ class TestFind(unittest.TestCase):
         assert(d["a"][0][0].block_items[0].rvalue.args.exprs[0].left.name == "a")
         assert(d["a"][0][1] == 0)
 
-    #####################################################################################
-    #   _____ ____  _   _ _____ _____ _______ _____ ____  _   _          _       _____  #
-    #  / ____/ __ \| \ | |  __ \_   _|__   __|_   _/ __ \| \ | |   /\   | |     / ____| #
-    # | |   | |  | |  \| | |  | || |    | |    | || |  | |  \| |  /  \  | |    | (___   #
-    # | |   | |  | | . ` | |  | || |    | |    | || |  | | . ` | / /\ \ | |     \___ \  #
-    # | |___| |__| | |\  | |__| || |_   | |   _| || |__| | |\  |/ ____ \| |____ ____) | #
-    #  \_____\____/|_| \_|_____/_____|  |_|  |_____\____/|_| \_/_/    \_\______|_____/  #
-    #####################################################################################
+    #################
+    #  _____  ____  #
+    # |_   _|/ ___| #
+    #   | | | |__   #
+    #   | | |  __|  #
+    #  _| |_| |     #
+    # |_____|_|     #
+    #################
 
-    def test_conditional_host_condition(self):
-        src = '''void provide_a(){ int a; }
-        void foo() { if (a) { _; } }'''
+    def test_if_host_condition(self):
+        src = '''void foo() { if (a) { _; } }'''
         d = self.src2d(src, ['a'])
-        print(d)
+        assert(d["a"][0][0].block_items[0].cond.name == 'a')
+
+    def test_if_iftrue(self):
+        src = '''void foo() { if (_){ x = a; } }'''
+        d = self.src2d(src, ['a'])
+        assert(d["a"][0][0].block_items[0].rvalue.name == 'a')
+
+    def test_if_else(self):
+        src = '''void foo() { if (_){ a = 10; } else { a = 0; }}'''
+        d = self.src2d(src, ['a'])
+        assert(d["a"][0][0].block_items[0].lvalue.name == 'a')
+        assert(d["a"][1][0].block_items[0].lvalue.name == 'a')
+
+    def test_nested_if(self):
+        src = '''
+void foo() {
+    if (_){
+        if(_) {a = 10; }
+        else { x = a; }
+        }
+    else {
+        if (a) {a = 100 ; }
+        }}'''
+        d = self.src2d(src, ['a'])
+        assert(d["a"][0][0].block_items[0].lvalue.name == 'a')
+        assert(d["a"][1][0].block_items[0].rvalue.name == 'a')
+        assert(d["a"][2][0].block_items[0].cond.name == 'a')
+        assert(d["a"][2][0].block_items[0].iftrue.block_items[0].lvalue.name == 'a')
+
+    def test_after_if_else(self):
+        src = '''
+void foo() {
+    if (_){ x = 10; }
+    else { x = 0; }
+    { a = 10; }}'''
+        d = self.src2d(src, ['a'])
+        assert(d["a"][0][0].block_items[0].lvalue.name == 'a')
+
+        #################################
+        #  _                            #
+        # | |                           #
+        # | |     ___   ___  _ __  ___  #
+        # | |    / _ \ / _ \| '_ \/ __| #
+        # | |___| (_) | (_) | |_) \__ \ #
+        # |______\___/ \___/| .__/|___/ #
+        #                   | |         #
+        #                   |_|         #
+        #################################
+    def test_for_loop(self):
+        src = '''
+void foo() {
+    for (a = 0; a < 10; a++){
+         x = 10;
+        }
+        }'''
+        d = self.src2d(src, ['a'])
+        print(d["a"][0][0])
+        assert(d["a"][0][0].block_items[0].init.lvalue.name == 'a')
+        assert(d["a"][0][0].block_items[0].cond.left.name == 'a')
+        assert(d["a"][0][0].block_items[0].next.expr.name == 'a')
+
+    def test_while_loop(self):
+        src = '''
+void foo() {
+    while (a < 10){
+        x = 10;
+        a++;
+    }
+}'''
+        d = self.src2d(src, ['a'])
+        assert(d["a"][0][0].block_items[0].cond.left.name == 'a')
+        assert(d["a"][0][0].block_items[0].stmt.block_items[1].expr.name == 'a')
+
+        ####################################
+        #   _____         _ _       _      #
+        #  / ____|       (_) |     | |     #
+        # | (_____      ___| |_ ___| |__   #
+        #  \___ \ \ /\ / / | __/ __| '_ \  #
+        #  ____) \ V  V /| | || (__| | | | #
+        # |_____/ \_/\_/ |_|\__\___|_| |_| #
+        ####################################
 
 
 
